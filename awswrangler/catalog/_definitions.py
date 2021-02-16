@@ -1,13 +1,39 @@
 """AWS Glue Catalog Delete Module."""
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 _logger: logging.Logger = logging.getLogger(__name__)
 
+_LEGAL_COLUMN_TYPES = [
+    "array",
+    "bigint",
+    "binary",
+    "boolean",
+    "char",
+    "date",
+    "decimal",
+    "double",
+    "float",
+    "int",
+    "interval",
+    "map",
+    "set",
+    "smallint",
+    "string",
+    "struct",
+    "timestamp",
+    "tinyint",
+]
+
 
 def _parquet_table_definition(
-    table: str, path: str, columns_types: Dict[str, str], partitions_types: Dict[str, str], compression: Optional[str]
+    table: str,
+    path: str,
+    columns_types: Dict[str, str],
+    partitions_types: Dict[str, str],
+    bucketing_info: Optional[Tuple[List[str], int]],
+    compression: Optional[str],
 ) -> Dict[str, Any]:
     compressed: bool = compression is not None
     return {
@@ -21,11 +47,12 @@ def _parquet_table_definition(
             "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
             "Compressed": compressed,
-            "NumberOfBuckets": -1,
+            "NumberOfBuckets": -1 if bucketing_info is None else bucketing_info[1],
             "SerdeInfo": {
                 "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
                 "Parameters": {"serialization.format": "1"},
             },
+            "BucketColumns": [] if bucketing_info is None else bucketing_info[0],
             "StoredAsSubDirectories": False,
             "SortColumns": [],
             "Parameters": {
@@ -38,9 +65,15 @@ def _parquet_table_definition(
     }
 
 
-def _parquet_partition_definition(location: str, values: List[str], compression: Optional[str]) -> Dict[str, Any]:
+def _parquet_partition_definition(
+    location: str,
+    values: List[str],
+    bucketing_info: Optional[Tuple[List[str], int]],
+    compression: Optional[str],
+    columns_types: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
     compressed: bool = compression is not None
-    return {
+    definition: Dict[str, Any] = {
         "StorageDescriptor": {
             "InputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.parquet.MapredParquetOutputFormat",
@@ -51,9 +84,16 @@ def _parquet_partition_definition(location: str, values: List[str], compression:
                 "SerializationLibrary": "org.apache.hadoop.hive.ql.io.parquet.serde.ParquetHiveSerDe",
             },
             "StoredAsSubDirectories": False,
+            "NumberOfBuckets": -1 if bucketing_info is None else bucketing_info[1],
+            "BucketColumns": [] if bucketing_info is None else bucketing_info[0],
         },
         "Values": values,
     }
+    if columns_types is not None:
+        definition["StorageDescriptor"]["Columns"] = [
+            {"Name": cname, "Type": dtype} for cname, dtype in columns_types.items()
+        ]
+    return definition
 
 
 def _csv_table_definition(
@@ -61,6 +101,7 @@ def _csv_table_definition(
     path: str,
     columns_types: Dict[str, str],
     partitions_types: Dict[str, str],
+    bucketing_info: Optional[Tuple[List[str], int]],
     compression: Optional[str],
     sep: str,
     skip_header_line_count: Optional[int],
@@ -87,11 +128,12 @@ def _csv_table_definition(
             "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
             "Compressed": compressed,
-            "NumberOfBuckets": -1,
+            "NumberOfBuckets": -1 if bucketing_info is None else bucketing_info[1],
             "SerdeInfo": {
                 "Parameters": {"field.delim": sep, "escape.delim": "\\"},
                 "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
             },
+            "BucketColumns": [] if bucketing_info is None else bucketing_info[0],
             "StoredAsSubDirectories": False,
             "SortColumns": [],
             "Parameters": {
@@ -106,9 +148,16 @@ def _csv_table_definition(
     }
 
 
-def _csv_partition_definition(location: str, values: List[str], compression: Optional[str], sep: str) -> Dict[str, Any]:
+def _csv_partition_definition(
+    location: str,
+    values: List[str],
+    bucketing_info: Optional[Tuple[List[str], int]],
+    compression: Optional[str],
+    sep: str,
+    columns_types: Optional[Dict[str, str]],
+) -> Dict[str, Any]:
     compressed: bool = compression is not None
-    return {
+    definition: Dict[str, Any] = {
         "StorageDescriptor": {
             "InputFormat": "org.apache.hadoop.mapred.TextInputFormat",
             "OutputFormat": "org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat",
@@ -119,6 +168,42 @@ def _csv_partition_definition(location: str, values: List[str], compression: Opt
                 "SerializationLibrary": "org.apache.hadoop.hive.serde2.lazy.LazySimpleSerDe",
             },
             "StoredAsSubDirectories": False,
+            "NumberOfBuckets": -1 if bucketing_info is None else bucketing_info[1],
+            "BucketColumns": [] if bucketing_info is None else bucketing_info[0],
         },
         "Values": values,
     }
+    if columns_types is not None:
+        definition["StorageDescriptor"]["Columns"] = [
+            {"Name": cname, "Type": dtype} for cname, dtype in columns_types.items()
+        ]
+    return definition
+
+
+def _check_column_type(column_type: str) -> bool:
+    if column_type not in _LEGAL_COLUMN_TYPES:
+        raise ValueError(f"{column_type} is not a legal data type.")
+    return True
+
+
+def _update_table_definition(current_definition: Dict[str, Any]) -> Dict[str, Any]:
+    definition: Dict[str, Any] = dict()
+    keep_keys = [
+        "Name",
+        "Description",
+        "Owner",
+        "LastAccessTime",
+        "LastAnalyzedTime",
+        "Retention",
+        "StorageDescriptor",
+        "PartitionKeys",
+        "ViewOriginalText",
+        "ViewExpandedText",
+        "TableType",
+        "Parameters",
+        "TargetTable",
+    ]
+    for key in current_definition["Table"]:
+        if key in keep_keys:
+            definition[key] = current_definition["Table"][key]
+    return definition

@@ -129,7 +129,7 @@ def workgroup3(bucket, kms_key):
 
 @pytest.fixture(scope="session")
 def databases_parameters(cloudformation_outputs):
-    parameters = dict(postgresql={}, mysql={}, redshift={})
+    parameters = dict(postgresql={}, mysql={}, redshift={}, sqlserver={})
     parameters["postgresql"]["host"] = cloudformation_outputs["PostgresqlAddress"]
     parameters["postgresql"]["port"] = 3306
     parameters["postgresql"]["schema"] = "public"
@@ -146,6 +146,10 @@ def databases_parameters(cloudformation_outputs):
     parameters["redshift"]["role"] = cloudformation_outputs["RedshiftRole"]
     parameters["password"] = cloudformation_outputs["DatabasesPassword"]
     parameters["user"] = "test"
+    parameters["sqlserver"]["host"] = cloudformation_outputs["SqlServerAddress"]
+    parameters["sqlserver"]["port"] = 1433
+    parameters["sqlserver"]["schema"] = "dbo"
+    parameters["sqlserver"]["database"] = "test"
     return parameters
 
 
@@ -158,14 +162,16 @@ def redshift_external_schema(cloudformation_outputs, databases_parameters, glue_
     IAM_ROLE '{databases_parameters["redshift"]["role"]}'
     REGION '{region}';
     """
-    engine = wr.catalog.get_engine(connection="aws-data-wrangler-redshift")
-    with engine.connect() as con:
-        con.execute(sql)
+    con = wr.redshift.connect(connection="aws-data-wrangler-redshift")
+    with con.cursor() as cursor:
+        cursor.execute(sql)
+        con.commit()
+    con.close()
     return "aws_data_wrangler_external"
 
 
 @pytest.fixture(scope="function")
-def glue_table(glue_database):
+def glue_table(glue_database: str) -> None:
     name = f"tbl_{get_time_str_with_random_suffix()}"
     print(f"Table name: {name}")
     wr.catalog.delete_table_if_exists(database=glue_database, table=name)
@@ -203,9 +209,11 @@ def redshift_table():
     name = f"tbl_{get_time_str_with_random_suffix()}"
     print(f"Table name: {name}")
     yield name
-    engine = wr.catalog.get_engine(connection="aws-data-wrangler-redshift")
-    with engine.connect() as con:
-        con.execute(f"DROP TABLE IF EXISTS public.{name}")
+    con = wr.redshift.connect("aws-data-wrangler-redshift")
+    with con.cursor() as cursor:
+        cursor.execute(f"DROP TABLE IF EXISTS public.{name}")
+    con.commit()
+    con.close()
 
 
 @pytest.fixture(scope="function")
@@ -213,9 +221,11 @@ def postgresql_table():
     name = f"tbl_{get_time_str_with_random_suffix()}"
     print(f"Table name: {name}")
     yield name
-    engine = wr.catalog.get_engine(connection="aws-data-wrangler-postgresql")
-    with engine.connect() as con:
-        con.execute(f"DROP TABLE IF EXISTS public.{name}")
+    con = wr.postgresql.connect("aws-data-wrangler-postgresql")
+    with con.cursor() as cursor:
+        cursor.execute(f"DROP TABLE IF EXISTS public.{name}")
+    con.commit()
+    con.close()
 
 
 @pytest.fixture(scope="function")
@@ -223,6 +233,31 @@ def mysql_table():
     name = f"tbl_{get_time_str_with_random_suffix()}"
     print(f"Table name: {name}")
     yield name
-    engine = wr.catalog.get_engine(connection="aws-data-wrangler-mysql")
-    with engine.connect() as con:
-        con.execute(f"DROP TABLE IF EXISTS test.{name}")
+    con = wr.mysql.connect("aws-data-wrangler-mysql")
+    with con.cursor() as cursor:
+        cursor.execute(f"DROP TABLE IF EXISTS test.{name}")
+    con.commit()
+    con.close()
+
+
+@pytest.fixture(scope="function")
+def sqlserver_table():
+    name = f"tbl_{get_time_str_with_random_suffix()}"
+    print(f"Table name: {name}")
+    yield name
+    con = wr.sqlserver.connect("aws-data-wrangler-sqlserver")
+    with con.cursor() as cursor:
+        cursor.execute(f"IF OBJECT_ID(N'dbo.{name}', N'U') IS NOT NULL DROP TABLE dbo.{name}")
+    con.commit()
+    con.close()
+
+
+@pytest.fixture(scope="function")
+def timestream_database_and_table():
+    name = f"tbl_{get_time_str_with_random_suffix()}"
+    print(f"Timestream name: {name}")
+    wr.timestream.create_database(name)
+    wr.timestream.create_table(name, name, 1, 1)
+    yield name
+    wr.timestream.delete_table(name, name)
+    wr.timestream.delete_database(name)
