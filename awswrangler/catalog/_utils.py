@@ -135,7 +135,7 @@ def sanitize_dataframe_columns_names(df: pd.DataFrame) -> pd.DataFrame:
 
 def sanitize_table_name(
     table: str,
-    match_crawler: Optional[bool]
+    match_crawler: Optional[bool] = None
 ) -> str:
     """Convert the table name to be compatible with Amazon Athena.
 
@@ -165,6 +165,7 @@ def sanitize_table_name(
     'my_new_table'
 
     """
+    match_crawler = False if match_crawler is None else match_crawler
     if match_crawler is True:
         table = table.lower()
     return _sanitize_name(name=table)
