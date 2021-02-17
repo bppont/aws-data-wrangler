@@ -133,7 +133,10 @@ def sanitize_dataframe_columns_names(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def sanitize_table_name(table: str) -> str:
+def sanitize_table_name(
+    table: str,
+    match_crawler: Optional[bool]
+) -> str:
     """Convert the table name to be compatible with Amazon Athena.
 
     https://docs.aws.amazon.com/athena/latest/ug/tables-databases-columns-names.html
@@ -147,6 +150,8 @@ def sanitize_table_name(table: str) -> str:
     ----------
     table : str
         Table name.
+    match_crawler : bool
+        Only takes effect if match_crawler=True. Enables table name to match the one created by a Glue Crawler.    
 
     Returns
     -------
@@ -160,6 +165,8 @@ def sanitize_table_name(table: str) -> str:
     'my_new_table'
 
     """
+    if match_crawler is True:
+        table = table.lower()
     return _sanitize_name(name=table)
 
 
